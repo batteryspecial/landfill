@@ -123,7 +123,7 @@ fn cli_version() {
     assert!(out.status.success());
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        format!("landfill {}\n", env!("CARGO_PKG_VERSION"))
+        format!("{}\n", env!("CARGO_PKG_VERSION"))
     );
 }
 
