@@ -1,0 +1,59 @@
+.TH LANDFILL 1 "2026-10-14" "landfill 0.1.0" "User Commands"
+.SH NAME
+landfill \- assembler for core RV32I instructions
+.SH SYNOPSIS
+.B landfill
+.RB [ \-s | \-st | \-\-symboltable ]
+.I file
+.br
+.B landfill \-\-version
+.SH DESCRIPTION
+.B landfill
+assembles the RV32I base integer instructions in
+.I file
+into raw machine code. The machine code is \fBnot\fR in any particular format.
+The output is written next to the input with its extension replaced by
+.BR .bin ;
+for example,
+.I prog.asm
+produces
+.IR prog.bin .
+.PP
+Each instruction becomes a 32-bit little-endian word.
+Pseudoinstructions and assembler directives are not yet supported.
+.PP
+If assembly fails, no output file is written.
+.SH OPTIONS
+.TP
+.BR \-s ", " \-st ", " \-\-symboltable
+Print the symbol table to standard output after assembling,
+one label per line followed by its address in hexadecimal.
+.TP
+.B \-\-version
+Print the version.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+The file could not be read or written, or contains an error.
+.TP
+.B 2
+Invalid command-line argument.
+.SH EXAMPLES
+Assemble
+.I riscv.asm
+into
+.I riscv.bin
+and print its labels:
+.PP
+.RS 4
+.EX
+$ landfill \-s riscv.asm
+loop 0x00000000
+end 0x00000008
+.EE
+.RE
+.SH AUTHOR
+batteryspecial (batteryspecial.xyz)
