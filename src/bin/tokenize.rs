@@ -24,13 +24,10 @@ fn tokenize(src: &str) -> Result<Vec<Token>, String> {
     let mut tokens = Vec::new();
     for (i, line) in src.lines().enumerate() {
         let code = line.split('#').next().unwrap_or("");
-        let before = tokens.len();
         scan_line(code, &mut tokens).map_err(
             |e| format!("line {}: {e}", i + 1)
         )?;
-        if tokens.len() > before {
-            tokens.push(Token::Newline);
-        }
+        tokens.push(Token::Newline);
     }
     Ok(tokens)
 }
@@ -291,7 +288,8 @@ mod tests {
 
     #[test]
     fn blank_and_comments() {
-        assert_eq!(tokenize("\n   \n# only a comment\n").unwrap(), vec![]);
+        let want = vec![Token::Newline, Token::Newline, Token::Newline];
+        assert_eq!(tokenize("\n   \n# only a comment\n").unwrap(), want);
     }
 
     #[test]
