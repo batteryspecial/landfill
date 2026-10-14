@@ -1,28 +1,17 @@
-use landfill::encode;
-use landfill::token::Token;
-use std::{io::{self, Read, Write}};
+pub mod encode;
+pub mod scan;
+pub mod token;
+
+use token::Token;
 
 const ERR: &str = "assembly error";
 
 // Symbol Table
 // swap in a HashMap if label count ever matters
-type Symbols = Vec<(String, u32)>;
+pub type Symbols = Vec<(String, u32)>;
 
-fn main() {
-    if let Err(e) = run() {
-        eprintln!("ERROR: {e}");
-        std::process::exit(1);
-    }
-}
-
-fn run() -> Result<(), String> {
-    let mut input = String::new();
-    io::stdin().read_to_string(&mut input).map_err(|e| e.to_string())?;
-
-    let mut tokens = Vec::new();
-    for line in input.lines() {
-        tokens.push(line.parse::<Token>()?);
-    }
+pub fn assemble(src: &str) -> Result<(Vec<u8>, Symbols), String> {
+    let tokens = scan::tokenize(src)?; // fails immediately
 
     let lines: Vec<Vec<Token>> = tokens
         .split(|t| *t == Token::Newline)
@@ -31,12 +20,7 @@ fn run() -> Result<(), String> {
 
     let symbols = pass1(&lines)?;
     let bytes = pass2(&lines, &symbols)?;
-
-    io::stdout().write_all(&bytes).map_err(|e| e.to_string())?;
-    for (name, addr) in &symbols {
-        eprintln!("{name} {addr}");
-    }
-    Ok(())
+    Ok((bytes, symbols))
 }
 
 fn pass1(lines: &[Vec<Token>]) -> Result<Symbols, String> {
@@ -186,7 +170,7 @@ fn mem_operand(ops: &[Token]) -> Result<(i64, u32), String> {
     match ops {
         [Token::Int(imm), Token::LParen, Token::Reg(rs1), Token::RParen] => Ok((*imm, *rs1)),
         [Token::LParen, Token::Reg(rs1), Token::RParen] => Ok((0, *rs1)),
-        _ => Err(format!("{ERR}: expected offset(register)")),
+        _ => Err(format!("{ERR}: expected format offset(register)")),
     }
 }
 
@@ -414,6 +398,23 @@ mod tests {
         assert_eq!(encode_line(&ret_three, 0, &vec![]), Ok(0x00008067));
         let bad = [id("lw"), Reg(5), Comma, Int(4), Reg(2)];
         let e = encode_line(&bad, 0, &vec![]).unwrap_err();
-        assert!(e.contains("expected offset(register)"), "{e}");
+        assert!(e.contains("expected format offset(register)"), "{e}");
+    }
+
+    #[test]
+    fn whole_program() {
+        let (bytes, symbols) = assemble("loop: addi t0, t0, -1\nbne t0, zero, loop\n").unwrap();
+        let want: Vec<u8> = [0xFFF28293u32, 0xFE029EE3]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        assert_eq!(bytes, want);
+        assert_eq!(symbols, vec![("loop".to_string(), 0)]);
+    }
+
+    #[test]
+    fn scan_error_stops_assembly() {
+        let e = assemble("add x1, x2, x3\nadd x1, x2, $3\n").unwrap_err();
+        assert!(e.starts_with("line 2: scanning error: "), "{e}");
     }
 }

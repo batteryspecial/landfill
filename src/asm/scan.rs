@@ -1,26 +1,8 @@
-use landfill::token::Token;
-use std::io::{self, Read};
+use super::token::Token;
 
 const ERR: &str = "scanning error";
 
-fn main() {
-    if let Err(e) = run() {
-        eprintln!("ERROR: {e}");
-        std::process::exit(1);
-    }
-}
-
-fn run() -> Result<(), String> {
-    let mut src = String::new();
-    io::stdin().read_to_string(&mut src).map_err(|e| e.to_string())?;
-
-    for t in tokenize(&src)? {
-        println!("{t}");
-    }
-    Ok(())
-}
-
-fn tokenize(src: &str) -> Result<Vec<Token>, String> {
+pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
     let mut tokens = Vec::new();
     for (i, line) in src.lines().enumerate() {
         let code = line.split('#').next().unwrap_or("");
