@@ -1,6 +1,6 @@
 use landfill::encode;
 use landfill::token::Token;
-use std::{fmt::format, io::{self, Read, Write}};
+use std::{io::{self, Read, Write}};
 
 const ERR: &str = "assembly error";
 
@@ -81,7 +81,7 @@ fn pass2(lines: &[Vec<Token>], symbols: &Symbols) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     let mut pc: u32 = 0;
 
-    for line in lines {
+    for (i, line) in lines.iter().enumerate() {
         let n_labels = line.iter().take_while(
             |t| matches!(t, Token::Label(_))
         ).count();
@@ -91,7 +91,9 @@ fn pass2(lines: &[Vec<Token>], symbols: &Symbols) -> Result<Vec<u8>, String> {
             continue;
         }
         
-        let word = encode_line(instr, pc, symbols)?;
+        let word = encode_line(instr, pc, symbols).map_err(
+            |e| format!("line {}: {e}", i + 1)
+        )?;
         out.extend_from_slice(&word.to_le_bytes());
         
         pc += 4;
@@ -129,22 +131,41 @@ fn lookup(mnemonic: &str) -> Option<Op> {
         "sltu" => R { funct3: 0x3, funct7: 0x00 },
 
         "addi" => I { funct3: 0x0 },
-        // TODO: xori ori andi slti sltiu
+        "xori" => I { funct3: 0x4 },
+        "ori" => I { funct3: 0x6 },
+        "andi" => I { funct3: 0x7 },
+        "slti" => I { funct3: 0x2 },
+        "sltiu" => I { funct3: 0x3 },
 
         "slli" => Shift { funct3: 0x1, funct7: 0x00 },
         "srai" => Shift { funct3: 0x5, funct7: 0x20 },
-        // TODO: srli
+        "srli" => Shift { funct3: 0x5, funct7: 0x00 },
 
         "lw" => Load { funct3: 0x2 },
-        // TODO: lb lh lbu lhu
+        "lb" => Load { funct3: 0x0 },
+        "lh" => Load { funct3: 0x1 },
+        "lbu" => Load { funct3: 0x4 },
+        "lhu" => Load { funct3: 0x5 },
+        
+        "sb" => Store { funct3: 0x0 },
+        "sh" => Store { funct3: 0x1 },
+        "sw" => Store { funct3: 0x2 },
 
         "beq" => Branch { funct3: 0x0 },
-        // TODO: bne blt bge bltu bgeu
+        "bne" => Branch { funct3: 0x1 },
+        "blt" => Branch { funct3: 0x4 },
+        "bge" => Branch { funct3: 0x5 },
+        "bltu" => Branch { funct3: 0x6 },
+        "bgeu" => Branch { funct3: 0x7 },
+
+        "jal" => Jal,
+        "jalr" => Jalr,
+        "lui" => U { opcode: 0x37 },
+        "auipc" => U { opcode: 0x17 },
 
         "ecall" => Fixed(0x00000073),
-        // TODO: ebreak
+        "ebreak" => Fixed(0x00100073),
 
-        // TODO: sb sh sw, jal, jalr, lui, auipc
         _ => return None,
     })
 }
@@ -157,39 +178,96 @@ fn target_offset(target: &Token, pc: u32, symbols: &Symbols) -> Result<i64, Stri
             .find(|(label, _)| label == name)
             .map(|(_, addr)| *addr as i64 - pc as i64)
             .ok_or_else(|| format!("{ERR}: undefined label '{name}'")),
-        other => Err(format!("{ERR}: expected label or offset, found {other}")),
+        other => Err(format!("{ERR}: expected label or offset, received '{other}'")),
+    }
+}
+
+fn mem_operand(ops: &[Token]) -> Result<(i64, u32), String> {
+    match ops {
+        [Token::Int(imm), Token::LParen, Token::Reg(rs1), Token::RParen] => Ok((*imm, *rs1)),
+        [Token::LParen, Token::Reg(rs1), Token::RParen] => Ok((0, *rs1)),
+        _ => Err(format!("{ERR}: expected offset(register)")),
     }
 }
 
 fn encode_line(instr: &[Token], pc: u32, symbols: &Symbols) -> Result<u32, String> {
-    use Token::{Comma, Int, LParen, RParen, Reg};
+    use Token::{Comma, Int, Reg};
 
     let Token::Id(mnemonic) = &instr[0] else {
-        return Err(format!("{ERR}: expected instruction, found {}", instr[0]));
+        return Err(format!("{ERR}: expected instruction, received '{}'", instr[0]));
     };
+
     let op = lookup(mnemonic).ok_or_else(|| format!("{ERR}: unknown instruction '{mnemonic}'"))?;
 
     match (op, &instr[1..]) {
-        (Op::R { funct3, funct7 }, [Reg(rd), Comma, Reg(rs1), Comma, Reg(rs2)]) => {
+        (Op::R { funct3, funct7 }, 
+            [Reg(rd), Comma, Reg(rs1), Comma, Reg(rs2)]
+        ) => {
             Ok(encode::r_type(funct7, *rs2, *rs1, funct3, *rd, 0b0110011))
         }
-        (Op::I { funct3 }, [Reg(rd), Comma, Reg(rs1), Comma, Int(imm)]) => {
+
+        (Op::I { funct3 }, 
+            [Reg(rd), Comma, Reg(rs1), Comma, Int(imm)]
+        ) => {
             encode::i_type(*imm, *rs1, funct3, *rd, 0b0010011)
         }
-        (Op::Shift { funct3, funct7 }, [Reg(rd), Comma, Reg(rs1), Comma, Int(shamt)]) => {
+
+        (Op::Shift { funct3, funct7 }, 
+            [Reg(rd), Comma, Reg(rs1), Comma, Int(shamt)]
+        ) => {
             if !(0..=31).contains(shamt) {
-                return Err(format!("{ERR}: shift amount {shamt} out of range"));
+                return Err(format!("{ERR}: shift amount '{shamt}' out of range"));
             }
             encode::i_type((funct7 << 5) as i64 | *shamt, *rs1, funct3, *rd, 0b0010011)
         }
-        (Op::Load { funct3 }, [Reg(rd), Comma, Int(imm), LParen, Reg(rs1), RParen]) => {
-            encode::i_type(*imm, *rs1, funct3, *rd, 0b0000011)
+
+        (Op::Load { funct3 }, 
+            [Reg(rd), Comma, mem @ ..]
+        ) => {
+            let (imm, rs1) = mem_operand(mem)?;
+            encode::i_type(imm, rs1, funct3, *rd, 0b0000011)
         }
-        (Op::Branch { funct3 }, [Reg(rs1), Comma, Reg(rs2), Comma, target]) => {
+        
+        (Op::Store { funct3 }, 
+            [Reg(rs2), Comma, mem @ ..]
+        ) => {
+            let (imm, rs1) = mem_operand(mem)?;
+            encode::s_type(imm, *rs2, rs1, funct3)
+        }
+
+        (Op::Branch { funct3 }, 
+            [Reg(rs1), Comma, Reg(rs2), Comma, target]
+        ) => {
             let offset = target_offset(target, pc, symbols)?;
             encode::b_type(offset, *rs2, *rs1, funct3)
         }
-        // TODO: arms for Store, Jal, Jalr, U
+
+        (Op::Jal, 
+            [Reg(rd), Comma, target]
+        ) => {
+            let offset = target_offset(target, pc, symbols)?;
+            encode::j_type(offset, *rd)
+        }
+
+        (Op::Jalr,
+            [Reg(rd), Comma, Reg(rs1), Comma, Int(imm)]
+        ) => {
+            encode::i_type(*imm, *rs1, 0x0, *rd, 0b1100111)
+        }
+
+        (Op::Jalr,
+            [Reg(rd), Comma, mem @ ..]
+        ) => {
+            let (imm, rs1) = mem_operand(mem)?;
+            encode::i_type(imm, rs1, 0x0, *rd, 0b1100111)
+        }
+
+        (Op::U { opcode }, 
+            [Reg(rd), Comma, Int(imm)]
+        ) => {
+            encode::u_type(*imm, *rd, opcode)
+        }
+
         (Op::Fixed(word), []) => Ok(word),
         _ => Err(format!("{ERR}: invalid operands for '{mnemonic}'")),
     }
@@ -280,5 +358,62 @@ mod tests {
         assert!(encode_line(&wrong_shape, 0, &vec![]).is_err());
         let unknown = [id("mul"), Reg(1), Comma, Reg(2), Comma, Reg(3)];
         assert!(encode_line(&unknown, 0, &vec![]).is_err());
+    }
+
+    #[test]
+    fn store_shape() {
+        let instr = [id("sw"), Reg(2), Comma, Int(-4), LParen, Reg(1), RParen];
+        assert_eq!(encode_line(&instr, 0, &vec![]), Ok(0xFE20AE23));
+    }
+
+    #[test]
+    fn implicit_offsets() {
+        let instr_exp = [id("lw"), Reg(5), Comma, Int(0), LParen, Reg(2), RParen];
+        let instr_imp = [id("lw"), Reg(5), Comma, LParen, Reg(2), RParen];
+        assert_eq!(encode_line(&instr_exp, 0, &vec![]), encode_line(&instr_imp, 0, &vec![]));
+    }
+
+    #[test]
+    fn jumps() {
+        let symbols = vec![("f".to_string(), 8)];
+        let jal = [id("jal"), Reg(1), Comma, id("f")];
+        assert_eq!(encode_line(&jal, 0, &symbols), Ok(0x008000EF));
+        let ret = [id("jalr"), Reg(0), Comma, Int(0), LParen, Reg(1), RParen];
+        assert_eq!(encode_line(&ret, 0, &vec![]), Ok(0x00008067));
+    }
+
+    #[test]
+    fn upper() {
+        let lui = [id("lui"), Reg(5), Comma, Int(0x12345)];
+        assert_eq!(encode_line(&lui, 0, &vec![]), Ok(0x123452B7));
+        let auipc = [id("auipc"), Reg(5), Comma, Int(0x12345)];
+        assert_eq!(encode_line(&auipc, 0, &vec![]), Ok(0x12345297));
+    }
+
+    #[test]
+    fn sltiu_and_ebreak() {
+        let sltiu = [id("sltiu"), Reg(1), Comma, Reg(2), Comma, Int(1)];
+        assert_eq!(encode_line(&sltiu, 0, &vec![]), Ok(0x00113093));
+        assert_eq!(encode_line(&[id("ebreak")], 0, &vec![]), Ok(0x00100073));
+    }
+
+    #[test]
+    fn pass2_line_number() {
+        let lines = vec![vec![], vec![id("add"), Reg(1)]];
+        let e = pass2(&lines, &vec![]).unwrap_err();
+        assert!(e.starts_with("line 2: assembly error: "), "{e}");
+    }
+
+    #[test]
+    fn mem_operand_forms() {
+        let sw = [id("sw"), Reg(2), Comma, LParen, Reg(1), RParen];
+        assert_eq!(encode_line(&sw, 0, &vec![]), Ok(0x0020A023));
+        let ret_short = [id("jalr"), Reg(0), Comma, LParen, Reg(1), RParen];
+        assert_eq!(encode_line(&ret_short, 0, &vec![]), Ok(0x00008067));
+        let ret_three = [id("jalr"), Reg(0), Comma, Reg(1), Comma, Int(0)];
+        assert_eq!(encode_line(&ret_three, 0, &vec![]), Ok(0x00008067));
+        let bad = [id("lw"), Reg(5), Comma, Int(4), Reg(2)];
+        let e = encode_line(&bad, 0, &vec![]).unwrap_err();
+        assert!(e.contains("expected offset(register)"), "{e}");
     }
 }
