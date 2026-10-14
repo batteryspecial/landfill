@@ -1,0 +1,30 @@
+name: encode
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "src/encode.rs"
+      - "src/lib.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/encode.yml"
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "src/encode.rs"
+      - "src/lib.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/encode.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Test
+      run: "cargo test --lib encode::"

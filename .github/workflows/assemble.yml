@@ -1,0 +1,34 @@
+name: assemble
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "src/bin/assemble.rs"
+      - "src/token.rs"
+      - "src/encode.rs"
+      - "src/lib.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/assemble.yml"
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "src/bin/assemble.rs"
+      - "src/token.rs"
+      - "src/encode.rs"
+      - "src/lib.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/assemble.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Test
+      run: "cargo test --bin assemble"

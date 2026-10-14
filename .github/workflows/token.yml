@@ -1,0 +1,30 @@
+name: token
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "src/token.rs"
+      - "src/lib.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/token.yml"
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "src/token.rs"
+      - "src/lib.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/token.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Test
+      run: "cargo test --lib token::"
