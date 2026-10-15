@@ -91,20 +91,26 @@ pub fn assemble_bytes(src: &[u8]) -> Option<Result<(Vec<u8>, Symbols<'_>), Strin
             chunks.push(&src[start..end]);
             start = end;
         }
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(chunks.len());
+        let threads = std::thread::available_parallelism().map_or(
+            1, |n| n.get()
+        ).min(chunks.len());
         let next = std::sync::atomic::AtomicUsize::new(0);
+
         let mut parts: Vec<(usize, Option<Part>)> = std::thread::scope(|s| {
             let workers: Vec<_> = (0..threads).map(|_| s.spawn(|| {
-                // take chunks as they come, so slower cores take fewer
                 let mut done = Vec::new();
                 loop {
+                    // dynamically take chunks as they come, so slower cores take fewer
                     let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let Some(chunk) = chunks.get(k) else { return done };
                     done.push((k, part(chunk)));
                 }
             })).collect();
-            workers.into_iter().flat_map(|w| w.join().unwrap()).collect()
+            workers.into_iter().flat_map(
+                |w| w.join().unwrap()
+            ).collect()
         });
+
         parts.sort_by_key(|&(k, _)| k);
         parts.into_iter().map(|(_, p)| p).collect()
     };
