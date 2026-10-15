@@ -1,12 +1,11 @@
 use std::fmt;
-use std::str::FromStr;
 
 const ERR: &str = "tokenization error";
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Token {
-    Label(String),
-    Id(String),
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Token<'a> {
+    Label(&'a str),
+    Id(&'a str),
     Reg(u32),
     Int(i64),
     Comma,
@@ -22,7 +21,7 @@ fn no_lexeme(tlex: &str, token_name: &str) -> Result<(), String> {
     Ok(())
 }
 
-impl fmt::Display for Token {
+impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Token::Label(name) => write!(f, "LABEL {name}"),
@@ -37,13 +36,11 @@ impl fmt::Display for Token {
     }
 }
 
-impl FromStr for Token {
-    type Err = String;
-
-    fn from_str(line: &str) -> Result<Token, String> {
+impl <'a> Token<'a> {
+    pub fn parse(line: &'a str) -> Result<Token<'a>, String> {
         // the inverse of Display
         // - "REG 5" -> Token::Reg(5), "COMMA" -> Token::Comma
-        // - anything malformed (unknown kind, missing or unparsable lexeme) -> Err(message)
+        // - anything sussy (unknown kind, missing or unparsable lexeme) -> Err(message)
 
         let (ttype, tlex) = line.split_once(' ').unwrap_or((line, ""));
 
@@ -52,13 +49,13 @@ impl FromStr for Token {
                 if tlex.is_empty() {
                     return Err(format!("{ERR}: missing label name"));
                 }
-                Ok(Token::Label(tlex.to_string()))
+                Ok(Token::Label(tlex))
             }
             "ID" => {
                 if tlex.is_empty() {
                     return Err(format!("{ERR}: missing ID name"));
                 }
-                Ok(Token::Id(tlex.to_string()))
+                Ok(Token::Id(tlex))
             }
             "REG" => {
                 let n = tlex
@@ -103,8 +100,8 @@ mod tests {
     #[test]
     fn round_trip() {
         let all = [
-            Token::Label("loop".to_string()),
-            Token::Id("addi".to_string()),
+            Token::Label("loop"),
+            Token::Id("addi"),
             Token::Reg(31),
             Token::Int(-8),
             Token::Comma,
@@ -113,14 +110,14 @@ mod tests {
             Token::Newline,
         ];
         for t in all {
-            assert_eq!(t.to_string().parse::<Token>(), Ok(t));
+            assert_eq!(Token::parse(&t.to_string()), Ok(t));
         }
     }
 
     #[test]
     fn extreme_values() {
         for t in [Token::Reg(0), Token::Reg(31), Token::Int(i64::MIN), Token::Int(i64::MAX), Token::Int(0)] {
-            assert_eq!(t.to_string().parse::<Token>(), Ok(t));
+            assert_eq!(Token::parse(&t.to_string()), Ok(t));
         }
     }
 
@@ -145,13 +142,13 @@ mod tests {
             "NEWLINE x",
         ];
         for line in bad {
-            assert!(line.parse::<Token>().is_err(), "{line:?} should be rejected");
+            assert!(Token::parse(line).is_err(), "{line:?} should be rejected");
         }
     }
 
     #[test]
     fn error_prefix() {
-        let e = "BOGUS".parse::<Token>().unwrap_err();
+        let e = Token::parse("SKIBIDI").unwrap_err();
         assert!(e.starts_with("tokenization error: "), "{e}");
     }
 }
