@@ -2,169 +2,322 @@ use super::token::Token;
 
 const ERR: &str = "scanning error";
 
-pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
+// SIMD Within A Register (SWAR) helpers
+const ONES: u64 = 0x0101_0101_0101_0101;
+const HIGHS: u64 = 0x8080_8080_8080_8080;
+
+#[inline(always)]
+pub(super) fn is_word(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
+#[inline(always)]
+pub(super) fn is_int(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'-' || c == b'+'
+}
+
+#[inline(always)]
+pub(super) fn munch(b: &[u8], mut i: usize, pred: fn(u8) -> bool) -> usize {
+    while i < b.len() && pred(b[i]) { i += 1; }
+    i
+}
+
+#[inline(always)]
+pub(super) fn load(b: &[u8], i: usize) -> u64 {
+    u64::from_le_bytes(b[i..i+8].try_into().unwrap())
+}
+
+#[inline(always)]
+pub(super) fn reg_of(k: u64) -> Option<u32> {
+    let (tk, n) = REGS[slot(k, REG_MAGIC_HASH, 7)];
+    (tk == k).then_some(n)
+}
+
+#[inline(always)]
+pub(super) fn key_at(b: &[u8], s: usize, e: usize) -> Option<u64> {
+    let n = e - s;
+    if n > 8 {
+        return None;
+    }
+
+    if s + 8 <= b.len() {
+        let w = load(b, s);
+        return Some(
+            if n == 8 {
+                w
+            }
+            else {
+                w & ((1 << (8 * n)) - 1)
+            }
+        );
+    }
+
+    let mut buf = [0; 8];
+    buf[..n].copy_from_slice(&b[s..e]);
+
+    Some(u64::from_le_bytes(buf))
+}
+
+pub const fn key(s: &[u8]) -> u64 {
+    let mut k = 0;
+    let mut i = 0;
+    while i < s.len() {
+        k |= (s[i] as u64) << (8 * i); i += 1;
+    }
+    k
+}
+
+pub fn word_key(s: &str) -> Option<u64> {
+    key_at(s.as_bytes(), 0, s.len())
+}
+
+pub const fn slot(k: u64, m: u64, bits: u32) -> usize {
+    // Implementation of the multiplicative hash function
+    (k.wrapping_mul(m) >> (64 - bits)) as usize
+}
+
+const REG_NAMES: [(&str, u32); 65] = [
+    // Numeric names (x0 - x31)
+    ("x0", 0),
+    ("x1", 1),
+    ("x2", 2),
+    ("x3", 3),
+    ("x4", 4),
+    ("x5", 5),
+    ("x6", 6),
+    ("x7", 7),
+    ("x8", 8),
+    ("x9", 9),
+    ("x10", 10),
+    ("x11", 11),
+    ("x12", 12),
+    ("x13", 13),
+    ("x14", 14),
+    ("x15", 15),
+    ("x16", 16),
+    ("x17", 17),
+    ("x18", 18),
+    ("x19", 19),
+    ("x20", 20),
+    ("x21", 21),
+    ("x22", 22),
+    ("x23", 23),
+    ("x24", 24),
+    ("x25", 25),
+    ("x26", 26),
+    ("x27", 27),
+    ("x28", 28),
+    ("x29", 29),
+    ("x30", 30),
+    ("x31", 31),
+
+    // ABI Aliases
+    ("zero", 0),
+    ("ra", 1),
+    ("sp", 2),
+    ("gp", 3),
+    ("tp", 4),
+    ("t0", 5),
+    ("t1", 6),
+    ("t2", 7),
+    ("s0", 8),
+    ("fp", 8), // fp is an alias for s0 (x8)
+    ("s1", 9),
+    ("a0", 10),
+    ("a1", 11),
+    ("a2", 12),
+    ("a3", 13),
+    ("a4", 14),
+    ("a5", 15), 
+    ("a6", 16), 
+    ("a7", 17),
+    ("s2", 18), 
+    ("s3", 19),
+    ("s4", 20),
+    ("s5", 21),
+    ("s6", 22),
+    ("s7", 23),
+    ("s8", 24),
+    ("s9", 25),
+    ("s10", 26),
+    ("s11", 27),
+    ("t3", 28),
+    ("t4", 29),
+    ("t5", 30),
+    ("t6", 31),
+];
+const REG_MAGIC_HASH: u64 = 0xa5f2a3e0788cbe85;
+
+// "we have hash map at home"
+// hashmap at home:
+static REGS: [(u64, u32); 128] = {
+    let mut t = [(0, 0); 128];
+    let mut i = 0;
+    while i < REG_NAMES.len() {
+        let r = key(REG_NAMES[i].0.as_bytes());
+        let h = slot(r, REG_MAGIC_HASH, 7);
+
+        // This shouldn't happen...
+        assert!(t[h].0 == 0, "register hash collision");
+
+        t[h] = (r, REG_NAMES[i].1);
+        i += 1;
+    }
+
+    t
+};
+
+pub(super) fn skip_line(b: &[u8], mut i: usize) -> usize {
+    while i + 8 < b.len() {
+        let x = load(b, i) ^ (ONES * b'\n' as u64);
+        let z = x.wrapping_sub(ONES) & !x & HIGHS; // top 10 bitwise tricks oat
+
+        if z != 0 {
+            return i + (z.trailing_zeros() / 8) as usize + 1;
+        }
+        i += 8;
+    }
+
+    b[i..].iter().position(
+        |&c| c == b'\n'
+    ).map_or(
+        b.len(), 
+        |n| i + n + 1
+    )
+}
+
+#[inline(always)]
+pub(super) fn skip_ws(b: &[u8], mut i: usize) -> usize {
+    loop {
+        if i + 8 <= b.len() {
+            let z = load(b, i) ^ (ONES * b' ' as u64);
+
+            // All 8 bytes were spaces (indentation)
+            if z == 0 {
+                i += 8;
+                continue;
+            }
+
+            i += (z.trailing_zeros() / 8) as usize;
+        }
+        match b.get(i) {
+            Some(b' ' | b'\t' | b'\r' | 0x0B | 0x0C) => i += 1,
+            _ => return i
+        }
+    }
+}
+
+#[cfg(test)]
+pub fn tokenize(src: &str) -> Result<Vec<Token<'_>>, String> {
+    // scan_line handles '\n' and '#' itself and returns where the next line starts
+
     let mut tokens = Vec::new();
-    for (i, line) in src.lines().enumerate() {
-        let code = line.split('#').next().unwrap_or("");
-        scan_line(code, &mut tokens).map_err(
-            |e| format!("line {}: {e}", i + 1)
+    let (mut pos, mut line) = (0, 0);
+    while pos < src.len() {
+        line += 1;
+        pos = scan_line(src, pos, &mut tokens).map_err(
+            |e| format!("line {line}: {e}")
         )?;
         tokens.push(Token::Newline);
     }
     Ok(tokens)
 }
 
-fn munch(s: &str, pred: impl Fn(char) -> bool) -> (&str, &str) {
-    let end = s.find(|c: char| !pred(c)).unwrap_or(s.len());
-    s.split_at(end)
-}
-
-fn scan_line(mut rest: &str, out: &mut Vec<Token>) -> Result<(), String> {
+pub(super) fn scan_line<'a>(src: &'a str, mut i: usize, out: &mut Vec<Token<'a>>) -> Result<usize, String> {
     // RV32I MM "DFA"
 
     // The actual DFA is super simple and does not specify tokens
     // We differentiate tokens in the actual code
 
-    while !rest.is_empty() {
-        rest = rest.trim_start();
-        if rest.is_empty() {
-            break;
-        }
+    let b = src.as_bytes();
 
-        let first = rest.chars().next().unwrap();
-        match first {
+    while i < b.len() {
+        match b[i] {
+            b'\n' => return Ok(i + 1),
+            b' ' | b'\t' | b'\r' | 0x0B | 0x0C => i += 1,
+            b'#' => return Ok(skip_line(b, i)),
             // punctuation
-            ',' => {
-                out.push(Token::Comma);
-                rest = &rest[1..];
+            b',' => {
+                out.push(Token::Comma); i += 1;
             }
-            '(' => {
-                out.push(Token::LParen);
-                rest = &rest[1..];
+            b'(' => {
+                out.push(Token::LParen); i += 1;
             }
-            ')' => {
-                out.push(Token::RParen);
-                rest = &rest[1..];
+            b')' => {
+                out.push(Token::RParen); i += 1;
             }
             // numerical literals (decimal or hex) with signing
-            '0'..='9' | '-' | '+' => {
-                let (lexeme, rem) = munch(rest, |c| c.is_ascii_alphanumeric() || c == '-' || c == '+');
-                let n = parse_int(lexeme)?;
-                out.push(Token::Int(n));
-                rest = rem;
+            b'0'..=b'9' | b'-' | b'+' => {
+                let end = munch(b, i, is_int);
+                out.push(Token::Int(parse_int(&src[i..end])?));
+                i = end;
             }
             // words, ids, registers, labels
-            c if c.is_ascii_alphabetic() || c == '_' => {
-                let (lexeme, rem) = munch(
-                    rest, 
-                    |c| c.is_ascii_alphanumeric() || c == '_'
-                );
-
-                if rem.starts_with(':') {
+            c if c.is_ascii_alphabetic() || c == b'_' => {
+                let end = munch(b, i, is_word);
+                let lexeme = &src[i..end];
+                if b.get(end) == Some(&b':') {
                     if reg_number(lexeme).is_some() {
                         return Err(format!("{ERR}: invalid label name '{lexeme}'"));
                     }
-                    out.push(Token::Label(lexeme.to_string()));
-                    rest = &rem[1..];
+                    out.push(Token::Label(lexeme));
+                    i = end + 1;
                 } else {
-                    if let Some(reg) = reg_number(lexeme) {
-                        out.push(Token::Reg(reg));
-                    } else {
-                        out.push(Token::Id(lexeme.to_string()));
-                    }
-
-                    rest = rem;
+                    out.push(match reg_number(lexeme) {
+                        Some(reg) => Token::Reg(reg),
+                        None => Token::Id(lexeme),
+                    });
+                    i = end;
                 }
             }
-            _ => {
-                return Err(format!("{ERR}: unexpected character '{first}'"));
+            _ => {   // non-ASCII: only Unicode whitespace is allowed
+                let c = src[i..].chars().next().unwrap();
+                if !c.is_whitespace() {
+                    return Err(format!("{ERR}: unexpected character '{c}'"));
+                }
+                i += c.len_utf8();
             }
         }
     }
 
-    Ok(())
+    Ok(i)
 }
 
-fn parse_int(s: &str) -> Result<i64, String> {
+pub(super) fn parse_int(s: &str) -> Result<i64, String> {
     // decimal (42, -8) and hex (0x1F, -0x10) in full radix complement
-    
-    let (neg_sign, rem) = if let Some(r) = s.strip_prefix('-') {
-        (true, r)
-    } else if let Some(r) = s.strip_prefix('+') {
-        (false, r)
-    } else {
-        (false, s)
+    let err = || format!("{ERR}: invalid integer '{s}'");
+
+    let (neg_sign, rem) = match s.as_bytes() {
+        [b'-', r @ ..] => (true, r),
+        [b'+', r @ ..] => (false, r),
+        r => (false, r),
+    };
+    let (rem, radix) = match rem {
+        [b'0', b'x' | b'X', r @ ..] => (r, 16),
+        r => (r, 10),
     };
 
-    let (rem, radix) = if let Some(r) = rem.strip_prefix("0x").or_else(|| rem.strip_prefix("0X")) {
-        (r, 16)
-    } else {
-        (rem, 10)
-    };
-
-    if rem.starts_with("+") || rem.starts_with("-") {
-        return Err(format!("{ERR}: invalid integer '{s}'"));
-    }
-    if radix == 10 && rem.len() > 1 && rem.starts_with('0') {
-        return Err(format!("{ERR}: invalid integer '{s}'"));
+    if rem.is_empty() || (radix == 10 && rem.len() > 1 && rem[0] == b'0') {
+        return Err(err());
     }
 
-    let rem = i64::from_str_radix(rem, radix);
-
-    let n = rem.map_err(|_| format!("{ERR}: invalid integer '{s}'"))?;
+    let mut n: i64 = 0;
+    for &c in rem {
+        let d = (c as char).to_digit(
+            radix
+        ).ok_or_else(err)? as i64;
+        
+        n = n.checked_mul(
+            radix as i64
+        ).and_then(
+            |n| n.checked_add(d)
+        ).ok_or_else(err)?;
+    }
     Ok(if neg_sign { -n } else { n })
 }
 
 fn reg_number(name: &str) -> Option<u32> {
-    // x0..x31 and ABI names (zero ra sp gp tp t0-t6 s0-s11 fp a0-a7)
-
-    if name.starts_with('x') {
-        let digits = &name[1..];
-        if digits.starts_with('0') && digits.len() > 1 {
-            return None;
-        }
-        if let Ok(n) = digits.parse::<u32>() {
-            if n < 32 {
-                return Some(n);
-            }
-        }
-    }
-
-    match name {
-        "zero" => Some(0),
-        "ra" => Some(1),
-        "sp" => Some(2),
-        "gp" => Some(3),
-        "tp" => Some(4),
-        "t0" => Some(5),
-        "t1" => Some(6),
-        "t2" => Some(7),
-        "s0" | "fp" => Some(8),
-        "s1" => Some(9),
-        "a0" => Some(10),
-        "a1" => Some(11),
-        "a2" => Some(12),
-        "a3" => Some(13),
-        "a4" => Some(14),
-        "a5" => Some(15),
-        "a6" => Some(16),
-        "a7" => Some(17),
-        "s2" => Some(18),
-        "s3" => Some(19),
-        "s4" => Some(20),
-        "s5" => Some(21),
-        "s6" => Some(22),
-        "s7" => Some(23),
-        "s8" => Some(24),
-        "s9" => Some(25),
-        "s10" => Some(26),
-        "s11" => Some(27),
-        "t3" => Some(28),
-        "t4" => Some(29),
-        "t5" => Some(30),
-        "t6" => Some(31),
-        _ => None,
-    }
+    reg_of(word_key(name)?)
 }
 
 #[cfg(test)]
@@ -190,6 +343,13 @@ mod tests {
         assert_eq!(parse_int("0x0010"), Ok(16));
         assert!(parse_int("--0x67").is_err());
         assert!(parse_int("0-x5").is_err());
+        // just past i64 and u64: must not wrap around to a small value
+        assert_eq!(parse_int("9223372036854775807"), Ok(i64::MAX));
+        assert!(parse_int("9223372036854775808").is_err());
+        assert!(parse_int("18446744073709551616").is_err());
+        assert!(parse_int("0x10000000000000000").is_err());
+        assert!(parse_int("-").is_err());
+        assert!(parse_int("+").is_err());
     }
 
     #[test]
@@ -211,8 +371,8 @@ mod tests {
     fn full_line() {
         let got = tokenize("loop: lw t0, -4(sp)   # comment\n").unwrap();
         let want = vec![
-            Token::Label("loop".to_string()),
-            Token::Id("lw".to_string()),
+            Token::Label("loop"),
+            Token::Id("lw"),
             Token::Reg(5),
             Token::Comma,
             Token::Int(-4),
@@ -226,7 +386,7 @@ mod tests {
 
     #[test]
     fn lone_label() {
-        let want = vec![Token::Label("loop".to_string()), Token::Newline];
+        let want = vec![Token::Label("loop"), Token::Newline];
         assert_eq!(tokenize("loop:\n").unwrap(), want);
     }
 
@@ -234,7 +394,7 @@ mod tests {
     fn no_spaces() {
         let got = tokenize("beq x1,x2,-8").unwrap();
         let want = vec![
-            Token::Id("beq".to_string()),
+            Token::Id("beq"),
             Token::Reg(1),
             Token::Comma,
             Token::Reg(2),
@@ -272,6 +432,37 @@ mod tests {
     fn blank_and_comments() {
         let want = vec![Token::Newline, Token::Newline, Token::Newline];
         assert_eq!(tokenize("\n   \n# only a comment\n").unwrap(), want);
+    }
+
+    #[test]
+    fn next_line_start() {
+        // scan_line returns where the next line begins; a comment runs to the '\n'
+        let src = "add x1, x2, x3 # c\nsub x1, x2, x3";
+        let mut toks = Vec::new();
+        assert_eq!(scan_line(src, 0, &mut toks), Ok(19));
+        assert_eq!(scan_line(src, 19, &mut toks), Ok(src.len()));
+        assert_eq!(toks.len(), 12);
+    }
+
+    #[test]
+    fn crlf_and_unicode_space() {
+        // \r is whitespace; non-ASCII whitespace is still skipped
+        assert_eq!(tokenize("ecall\r\nebreak\r\n").unwrap(), vec![
+            Token::Id("ecall"), Token::Newline, Token::Id("ebreak"), Token::Newline,
+        ]);
+        assert_eq!(tokenize("ecall\u{a0}\n").unwrap(), vec![Token::Id("ecall"), Token::Newline]);
+    }
+
+    #[test]
+    fn swar_skips() {
+        let b = b"#                   comment\nnext";
+        assert_eq!(skip_line(b, 0), 28);
+        assert_eq!(skip_line(b"# no newline", 0), 12);
+        assert_eq!(skip_line(b"\n", 0), 1);
+        assert_eq!(skip_line(b"1234567\n", 0), 8);
+        assert_eq!(skip_ws(b"                 \t x", 0), 19);
+        assert_eq!(skip_ws(b"   ", 0), 3);
+        assert_eq!(skip_ws(b"\n", 0), 0)
     }
 
     #[test]
