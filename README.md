@@ -1,6 +1,9 @@
+<img width="260" height="227" alt="logo" src="https://github.com/user-attachments/assets/f0c6e4b5-441c-43f6-b006-ff8204503b1b" />
+<br/>
+
 # landfill
 
-An assembler for core RV32I instructions.
+A back-patching bitwise tokenizer and assembler for core RV32I instructions.
 
 ## Install
 
