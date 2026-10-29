@@ -411,6 +411,17 @@ fn encode_line<'a>(instr: &[Token<'a>], pc: u32, index: &Index) -> Result<Encode
         return Err(format!("{ERR}: expected instruction, received '{}'", instr[0]));
     };
 
+    match (mnemonic, &instr[1..]) {
+        // mv rd, rs -> addi rd, rs, 0
+        ("mv", [Reg(rd), Comma, Reg(rs)]) => {
+            return types::i_type(0, *rs, 0x0, *rd, 0b0010011).map(Encoded::Word)
+        }
+        ("j", [target]) => {
+            return jump(Op::Jal, self::target(target, pc, index)?, 0, 0)
+        }
+        _ => {}
+    }
+
     let op = lookup(mnemonic).ok_or_else(|| format!("{ERR}: unknown instruction '{mnemonic}'"))?;
 
     let word = match (op, &instr[1..]) {

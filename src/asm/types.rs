@@ -51,7 +51,7 @@ pub fn b_type(offset: i64, rs2: u32, rs1: u32, funct3: u32) -> Result<u32, Strin
     let offset_4_1 = offset_u >> 1 & 0xF;
 
     let opcode = 0b1100011;
-
+    
     Ok((offset_12 << 31) | (offset_10_5 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (offset_4_1 << 8) | (offset_11 << 7) | opcode)
 }
 

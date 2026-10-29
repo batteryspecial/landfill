@@ -1,9 +1,9 @@
 /**
  * encode.rs
  * 
- * Read the mnemonic, then parse exactly the operand shape it expects (no token stream).
- *  - Token positions come from byte-class masks of the 32 bytes after the line's indentation (64 if the code runs longer)
- *  - Every token start is a bit, so stepping to the next token is starts &= starts - 1
+ * Parse exactly the operand shape a mnemonic expects.
+ *  - Token positions come from masks after the line's indentation.
+ *  - Every token start is a bit, step is starts &= starts - 1
  */
 
 use super::classify;
@@ -132,7 +132,7 @@ impl<'a> Tokens<'a, '_> {
     }
 }
 
-// Parse the line starting at `start`; false if the general path must redo it
+// Parse the line starting at start; false if the general path must redo it
 // Inlined into the line loop so the classifier's constants stay in registers
 #[inline(always)]
 pub(super) fn line<'a>(src: &'a str, start: usize, line: usize, st: &mut State<'a>) -> bool {
