@@ -81,7 +81,7 @@ fn scratch_copy(sample: &str, test: &str) -> PathBuf {
 }
 
 #[test]
-fn cli_writes_bin_next_to_input() {
+fn cli_writes_bin() {
     let asm = scratch_copy("program.S", "bin");
     let out = landfill(&[&asm]);
 
@@ -94,7 +94,7 @@ fn cli_writes_bin_next_to_input() {
 }
 
 #[test]
-fn cli_prints_symbol_table() {
+fn cli_symbol_table() {
     let asm = scratch_copy("program.S", "symbols");
     for flag in ["-s", "-st", "--symboltable"] {
         let out = landfill(&[Path::new(flag), &asm]);
@@ -108,7 +108,7 @@ fn cli_prints_symbol_table() {
 }
 
 #[test]
-fn cli_error_writes_no_bin() {
+fn cli_error_no_bin() {
     let asm = scratch_copy("errors/scan.S", "error");
     let out = landfill(&[&asm]);
 
@@ -128,7 +128,7 @@ fn cli_version() {
 }
 
 #[test]
-fn cli_bad_arguments_exit_2() {
+fn cli_bad_args_exit_2() {
     let asm = scratch_copy("program.S", "usage");
     assert_eq!(landfill(&[]).status.code(), Some(2));
     assert_eq!(landfill(&[Path::new("-x"), &asm]).status.code(), Some(2));
